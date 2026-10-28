@@ -1,0 +1,57 @@
+{
+  "connected": true,
+  "source": "windows-ui-test-fixture",
+  "fetchedAt": "2026-10-28T13:03:13+08:00",
+  "count": 4,
+  "lectures": [
+    {
+      "id": "3fbcccce78ea9ee3",
+      "title": "面向低空场景的目标无源定位与跟踪方法",
+      "level": "800",
+      "category": "学术前沿",
+      "speaker": "孙奕髦",
+      "startAt": "2026年11月8日 14:30-16:30",
+      "location": "一号院103-104",
+      "capacity": null,
+      "remaining": 0,
+      "status": "full"
+    },
+    {
+      "id": "061dd3d6459b32f3",
+      "title": "面向冲击钝性伤防护的柔性超材料及其应用",
+      "level": "800",
+      "category": "学术前沿",
+      "speaker": "张玉武",
+      "startAt": "2026年11月3日 19:30-21:00",
+      "location": "三号院308-B107",
+      "capacity": null,
+      "remaining": null,
+      "status": "upcoming"
+    },
+    {
+      "id": "8eef36269c7bf453",
+      "title": "联合国——多边舞台上的国际博弈",
+      "level": "800",
+      "category": "人文社科",
+      "speaker": "秦谦",
+      "startAt": "2026年11月2日 18:00-21:00",
+      "location": "一号院103-106",
+      "capacity": null,
+      "remaining": 0,
+      "status": "full"
+    },
+    {
+      "id": "open-manual-test",
+      "title": "手动与即时报名测试讲座",
+      "level": "800",
+      "category": "学术前沿",
+      "speaker": "测试主讲人",
+      "startAt": "2026年11月5日 19:00-20:30",
+      "location": "一号院101",
+      "capacity": 50,
+      "remaining": 12,
+      "status": "open",
+      "description": "仅用于界面自动化测试，不访问真实接口。"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "name": "Lecture800",
+  "short_name": "Lecture800",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f6f2",
+  "theme_color": "#173f35",
+  "description": "Lecture800 研究生学术讲座实时监控与自动预检平台",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

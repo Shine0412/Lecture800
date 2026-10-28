@@ -1,0 +1,45 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*.dpapi
+*.pem
+*.key
+*.cer
+*.p12
+*.pfx
+
+# Runtime data: sessions, personal records, snapshots and logs
+windows-agent/data/
+Lecture800-data/
+dist-desktop/
+capture-ca/
+*.log
+
+# Local research and machine-specific tooling (kept locally, not uploaded)
+local-research/
+.home/
+.tools/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+windows-agent/build/
+
+# Node and frontend outputs
+node_modules/
+app/node_modules/
+app/dist/
+app/artifacts/
+app/test-results/
+app/playwright-report/
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini

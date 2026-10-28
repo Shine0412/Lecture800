@@ -1,0 +1,3 @@
+-r requirements.txt
+PyInstaller==6.22.3
+pywinauto==0.6.9; platform_system == "Windows"
