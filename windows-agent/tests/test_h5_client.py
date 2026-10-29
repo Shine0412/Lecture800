@@ -33,22 +33,26 @@ class Response:
 class FakeSession:
     routes = {}
     requests = []
+    instances = []
 
     def __init__(self):
         import requests
         self.cookies = requests.cookies.RequestsCookieJar()
         self.headers = {}
+        self.instances.append(self)
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return False
+    def close(self):
+        pass
 
     def request(self, method, url, **kwargs):
+        import requests
         self.requests.append((method, url, kwargs))
         result = self.routes[url.rsplit("/api/", 1)[-1]]
         payload = result(kwargs) if callable(result) else result
+        if isinstance(payload, requests.RequestException):
+            raise payload
+        if isinstance(payload, Response):
+            return payload
         return Response(payload)
 
 
@@ -56,6 +60,7 @@ class ClientTests(unittest.TestCase):
     def setUp(self):
         FakeSession.routes = {}
         FakeSession.requests = []
+        FakeSession.instances = []
         self.client = H5Client(MemoryStore(), session_factory=FakeSession)
 
     def test_normalizes_actual_h5_fields_and_status(self):
@@ -112,6 +117,27 @@ class ClientTests(unittest.TestCase):
         if group_type is None:
             item.update({"signArrive": 0, "chairEndTime": 1_700_000_000_000, "chairBeginTime": 1_700_000_000_000})
         return {"code": "00000", "data": {"records": [item]}}
+
+    def test_reuses_thread_local_https_session(self):
+        FakeSession.routes = {"common/getBeforeTimeMillis.do": {"code": "00000", "data": 0}}
+        self.client.before_time_millis()
+        self.client.before_time_millis()
+        self.assertEqual(len(FakeSession.instances), 1)
+        self.assertEqual(len(FakeSession.requests), 2)
+
+    def test_get_retries_connection_failure_once(self):
+        import requests
+        responses = iter([requests.ConnectionError("temporary"), {"code": "00000", "data": 0}])
+        FakeSession.routes = {"common/getBeforeTimeMillis.do": lambda kwargs: next(responses)}
+        self.assertEqual(self.client.before_time_millis(), 0)
+        self.assertEqual(len(FakeSession.requests), 2)
+
+    def test_post_never_retries_connection_failure(self):
+        import requests
+        FakeSession.routes = {"chair/chairApply.do": requests.ConnectionError("temporary")}
+        with self.assertRaises(requests.ConnectionError):
+            self.client.apply("42")
+        self.assertEqual(len(FakeSession.requests), 1)
 
     def test_auth_failure_is_not_success(self):
         FakeSession.routes = {"user/getUserInfo.do": {"code": "A0230", "msg": "TOKEN校验失败或过期"}}

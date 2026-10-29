@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from capture_service import CaptureManager
+from capture_service import CaptureManager, engine_arguments
 from lecture_agent import create_app
 
 
@@ -68,8 +68,34 @@ class CaptureManagerTests(unittest.TestCase):
         process, popen = self.start_fake(manager)
         manager.ca_dir.mkdir(parents=True, exist_ok=True)
         manager.cert_file.write_bytes(b"test-certificate")
+        manager.status_file.write_text(json.dumps({"status": "ready"}), encoding="utf-8")
         self.wait_for(manager, "waiting")
         return process, popen
+
+    def test_local_engine_does_not_ignore_connections_at_ip_stage(self):
+        arguments = engine_arguments(self.data_dir, self.data_dir / "capture_addon.py")
+        self.assertIn("local:WeChatAppEx.exe", arguments)
+        self.assertNotIn("--ignore-hosts", arguments)
+        self.assertNotIn("--allow-hosts", arguments)
+        self.assertIn("flow_detail=0", arguments)
+
+    def test_request_without_credentials_shows_diagnostic_and_keeps_waiting(self):
+        manager = self.manager()
+        self.reach_waiting(manager)
+        manager.status_file.write_text(json.dumps({
+            "status": "seen", "path": "/chair/h5/api/chair/pageChair.do",
+        }), encoding="utf-8")
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline and "已收到请求" not in manager.snapshot()["detail"]:
+            time.sleep(0.03)
+        result = manager.snapshot()
+        self.assertEqual(result["state"], "waiting")
+        self.assertEqual(result["stage"], "session")
+        self.assertTrue(result["active"])
+        self.assertTrue(result["requestSeen"])
+        self.assertGreaterEqual(result["remainingSeconds"], 0)
+        self.assertIn("/chair/h5/api/chair/pageChair.do", result["detail"])
+        self.assertIn("正在等待携带登录信息的接口", result["detail"])
 
     def test_authorization_and_wechat_are_required(self):
         manager = self.manager()

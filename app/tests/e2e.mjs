@@ -206,6 +206,7 @@ try {
   assert.equal(await captureStart.isEnabled(), true)
   await captureStart.click()
   await setupDialog.getByText(/捕获已就绪：请重新打开目标讲座页面/).waitFor()
+  assert.match(await setupDialog.innerText(), /有效操作窗口为 10 分钟/)
   assert.deepEqual(captureStartCalls, [{ authorized: true }])
   await setupDialog.getByRole('button', { name: '停止并清理', exact: true }).click()
   await setupDialog.getByText(/已取消会话配置，未修改系统代理/).waitFor()

@@ -5,6 +5,7 @@ import ctypes
 import json
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
 from datetime import datetime, timezone
@@ -191,9 +192,18 @@ class H5Client:
     def __init__(self, store, session_factory=requests.Session):
         self.store = store
         self.session_factory = session_factory
+        self._local = threading.local()
 
-    def _new_session(self):
+    def _get_session(self):
         saved = self.store.load()
+        signature = json.dumps(saved, ensure_ascii=False, sort_keys=True)
+        cached = getattr(self._local, "cached", None)
+        if cached and cached["signature"] == signature:
+            return cached["session"]
+        if cached:
+            close = getattr(cached["session"], "close", None)
+            if close:
+                close()
         session = self.session_factory()
         session.cookies.update(saved["cookies"])
         session.headers.update({
@@ -203,27 +213,53 @@ class H5Client:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Lecture800/1.0",
         })
         for name, value in saved.get("headers", {}).items():
-            if name.lower() not in {"cookie", "content-length", "host", "proxy-authorization", "authorization"}:
+            if name.lower() not in {"cookie", "content-length", "host", "proxy-authorization"}:
                 session.headers[name] = value
+        self._local.cached = {"signature": signature, "session": session}
         return session
 
+    def _discard_session(self, session):
+        cached = getattr(self._local, "cached", None)
+        if cached and cached["session"] is session:
+            self._local.cached = None
+        close = getattr(session, "close", None)
+        if close:
+            close()
+
     def request(self, method, path, *, params=None, data=None):
-        with self._new_session() as session:
-            response = session.request(method, f"{API_BASE}/{path.lstrip('/')}", params=params, data=data, timeout=(8, 20))
+        method = method.upper()
+        attempts = 2 if method == "GET" else 1
+        for attempt in range(attempts):
+            session = self._get_session()
             try:
-                payload = response.json()
-            except ValueError as error:
-                raise ApiError(f"服务器返回了非 JSON 响应（HTTP {response.status_code}）", "INVALID_RESPONSE") from error
-            code = str(payload.get("code", ""))
-            if code in AUTH_CODES:
-                raise ApiError("登录会话已失效，请重新捕获本人已登录会话", code)
-            if response.status_code != 200 or code != SUCCESS_CODE:
-                raise ApiError(str(payload.get("msg") or f"接口请求失败（HTTP {response.status_code}）"), code or str(response.status_code))
-            if response.cookies.get_dict():
-                saved = self.store.load()
-                cookies = {**saved["cookies"], **response.cookies.get_dict()}
-                self.store.save(cookies, saved.get("headers"))
-            return payload.get("data")
+                response = session.request(
+                    method, f"{API_BASE}/{path.lstrip('/')}", params=params, data=data,
+                    timeout=(5, 15) if method == "GET" else (8, 20),
+                )
+            except (requests.ConnectionError, requests.Timeout):
+                self._discard_session(session)
+                if attempt + 1 < attempts:
+                    time.sleep(0.35)
+                    continue
+                raise
+            if method == "GET" and response.status_code in {502, 503, 504} and attempt + 1 < attempts:
+                time.sleep(0.35)
+                continue
+            break
+        try:
+            payload = response.json()
+        except ValueError as error:
+            raise ApiError(f"服务器返回了非 JSON 响应（HTTP {response.status_code}）", "INVALID_RESPONSE") from error
+        code = str(payload.get("code", ""))
+        if code in AUTH_CODES:
+            raise ApiError("登录会话已失效，请重新捕获本人已登录会话", code)
+        if response.status_code != 200 or code != SUCCESS_CODE:
+            raise ApiError(str(payload.get("msg") or f"接口请求失败（HTTP {response.status_code}）"), code or str(response.status_code))
+        if response.cookies.get_dict():
+            saved = self.store.load()
+            cookies = {**saved["cookies"], **response.cookies.get_dict()}
+            self.store.save(cookies, saved.get("headers"))
+        return payload.get("data")
 
     def before_time_millis(self):
         return self.request("GET", "/common/getBeforeTimeMillis.do") or 0

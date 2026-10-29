@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle, BookOpenCheck, CalendarDays, Check, CheckCircle2, ChevronRight,
   CircleHelp, Clock3, GraduationCap, History, LayoutDashboard, LibraryBig,
@@ -147,9 +147,14 @@ export default function App() {
   const [autoReceipt, setAutoReceipt] = useState(null)
   const [showSessionSetup, setShowSessionSetup] = useState(false)
   const nextPrecheck = getNextRun('11:58')
+  const dataInFlight = useRef(false)
+  const mineInFlight = useRef(false)
+  const verificationRef = useRef(null)
   const showToast = useCallback((message, tone = 'success') => setToast({ message, tone }), [])
 
   const loadMine = useCallback(async (notify = false) => {
+    if (mineInFlight.current) return null
+    mineInFlight.current = true
     setMineLoading(true)
     try {
       const result = await fetchMine()
@@ -161,21 +166,29 @@ export default function App() {
       setMineError(reason.message || '个人信息接口读取失败')
       return null
     } finally {
+      mineInFlight.current = false
       setMineLoading(false)
     }
   }, [showToast])
 
   const loadData = useCallback(async (manual = false) => {
+    if (dataInFlight.current) return
+    dataInFlight.current = true
     if (manual) setRefreshing(true)
     try {
+      const shouldVerify = manual || !verificationRef.current
       const [snapshot, operationLogs, checks, currentSettings] = await Promise.all([
-        fetchLiveLectures({ refresh: manual }), fetchOperationLogs(), fetchVerification(), fetchSettings(),
+        fetchLiveLectures({ refresh: manual }), fetchOperationLogs(),
+        shouldVerify ? fetchVerification() : Promise.resolve(null), fetchSettings(),
       ])
       setLectures(snapshot.lectures)
       setLogs(operationLogs.map(logView))
-      setVerification(checks)
+      if (checks) {
+        verificationRef.current = checks
+        setVerification(checks)
+      }
       setSettings(currentSettings)
-      setConnected(Boolean(snapshot.connected && checks.connected))
+      setConnected(Boolean(snapshot.connected && (!checks || checks.connected)))
       setLastSync(snapshot.fetchedAt)
       setError('')
       loadMine(false)
@@ -184,12 +197,18 @@ export default function App() {
       setConnected(false)
       setError(reason.message || '无法连接学校接口')
       try {
-        const [checks, currentSettings] = await Promise.all([fetchVerification(), fetchSettings()])
-        setVerification(checks)
+        const [checks, currentSettings] = await Promise.all([
+          manual ? fetchVerification() : Promise.resolve(null), fetchSettings(),
+        ])
+        if (checks) {
+          verificationRef.current = checks
+          setVerification(checks)
+        }
         setSettings(currentSettings)
       } catch {}
       if (manual) showToast(reason.message || '同步失败，请检查登录会话。', 'warning')
     } finally {
+      dataInFlight.current = false
       setLoading(false)
       setRefreshing(false)
     }
@@ -363,7 +382,7 @@ export default function App() {
           <div className="settings-side"><section className="section-block task-status-card"><div className="section-heading"><div><h2>下一次执行</h2><p>核心状态一目了然</p></div><span className={`pulse-dot ${settings?.autoEnabled ? '' : 'paused'}`} /></div><strong className="task-time">11:58</strong><p>{formatDateTime(nextPrecheck, true)} 预检，12:00 报名</p><dl><div><dt>当前候选</dt><dd>{openTarget.length} 场</dd></div><div><dt>任务状态</dt><dd>{settings?.runtime?.running ? '正在执行' : settings?.autoEnabled ? '已启用' : '已暂停'}</dd></div><div><dt>已选地点</dt><dd>{selectedLocations.length} 类</dd></div></dl></section><section className="section-block security-card"><span className="stat-icon blue"><ListChecks /></span><h2>连接验证</h2><div className="setup-notice session-reuse-note"><ShieldCheck size={18} /><div><strong>再次打开 EXE，无需同步打开微信小程序</strong><p>配置成功后，程序会复用本机加密会话直接访问接口。仅在会话失效、换电脑／Windows 用户或连接验证失败时，才需重新打开小程序配置。</p></div></div><VerificationList verification={verification} /><p className="setting-footnote">不要复制旧电脑的加密会话；需要重新配置时，在 EXE 内打开向导。</p><button className="button secondary full" onClick={() => setShowSessionSetup(true)}><ShieldCheck size={16} />配置／重新配置会话</button></section><section className="section-block reset-card"><p>最后同步：{formatSyncTime(lastSync)}</p><button className="button secondary" disabled={refreshing} onClick={() => loadData(true)}><RefreshCw size={16} />立即同步</button></section></div>
         </div>}
 
-        {activePage === 'guide' && <div className="guide-grid"><section className="section-block guide-main"><div className="section-heading"><div><h2>首次使用，按这 5 步操作</h2><p>适用于 Lecture800 Windows 桌面端</p></div><CircleHelp /></div><ol className="guide-steps"><li><span>1</span><div><h3>本人登录小程序</h3><p>在 Windows 微信中登录“科大微门户”，进入“研究生学术讲座信息化平台”。软件不索取账号密码。</p></div></li><li><span>2</span><div><h3>授权并验证本机会话</h3><p>仅在明确授权后捕获目标学校域名的登录会话。会话用当前 Windows 用户的 DPAPI 加密保存，界面只显示验证结果，不显示 Token 或 Cookie。</p><p>点击“打开内置配置向导”，按提示重新打开讲座页面；成功、取消或超时都会停止捕获并清理临时证书，不修改系统代理。</p><button className="button secondary small" onClick={() => setShowSessionSetup(true)}>打开内置配置向导</button></div></li><li><span>3</span><div><h3>确认三项连接验证通过</h3><p>首页和设置页会实际请求学校接口。讲座与“我的”可独立并发读取，无需保持小程序在前台，也不依赖屏幕截图或控件。</p></div></li><li><span>4</span><div><h3>选择地点并开启每日任务</h3><p>在设置页勾选允许自动报名的校区和开课地点，再打开“自动抢课”。开关与地点规则都会立即保存，不需要另建 Windows 定时任务。</p></div></li><li><span>5</span><div><h3>手动、即时或每日自动报名</h3><p>可报名讲座的卡片和详情页提供“手动报名”；首页“立即开始自动抢课”会按当前地点规则立即并发提交全部候选。每天 11:58 预检、12:00 自动任务仍然保留。所有操作逐场以“我的报名”为回执，未核验到不记为成功，也不会自动重发。</p></div></li></ol><div className="setup-notice session-reuse-note"><ShieldCheck size={18} /><div><strong>再次打开 EXE，无需同步打开微信小程序</strong><p>配置成功后，程序会复用本机加密会话直接访问接口。仅在会话失效、换电脑／Windows 用户或连接验证失败时，才需重新打开小程序配置。</p></div></div></section><div className="guide-side"><section className="section-block security-card"><span className="stat-icon green"><ShieldCheck /></span><h2>实现原理与限制</h2><p className="guide-copy">首次从本人已登录流量捕获 Cookie／Token，之后由 Python requests 直接请求学校 H5 接口并保存服务端下发的新会话。12:00 秒级触发并并发提交可缩短耗时，但受学校服务器、名额和网络影响，不能保证全部抢到或长期无人值守。</p></section><section className="section-block security-card"><span className="stat-icon amber"><BookOpenCheck /></span><h2>考勤分类与退课</h2><p className="guide-copy">接口签到字段为 1 时归为“已考勤”；讲座已结束且未记录签到时归为“未完成考勤”，与“待评价／已评价”分开显示。可退课程会显示“退课”，必须二次确认，并重新查询报名记录确认移除后才记为成功。</p></section><section className="section-block security-card"><span className="stat-icon blue"><MonitorCheck /></span><h2>EXE 移植要求</h2><ul><li>单 EXE 可启动不等于免配置抢课，也不保证报名成功</li><li>Windows 10／11，需要 Microsoft Edge WebView2，无需另装 Python 或 Node.js</li><li>复制到可写目录；任务与数据保存在 EXE 旁的 Lecture800-data</li><li>首次配置已内置：在设置页或使用说明中打开配置向导</li><li>新电脑必须重新捕获；如提示权限不足，需手动以管理员身份运行</li><li>DPAPI 会话绑定原电脑和 Windows 用户，复制数据目录不能迁移登录</li><li>每天保持 EXE 运行、电脑不睡眠、网络可用且会话有效</li></ul></section><section className="section-block security-card"><span className="stat-icon amber"><Clock3 /></span><h2>每日时间线</h2><ul><li>11:58：会话、接口与全部候选课程预检</li><li>12:00：重新读取并并发提交全部候选</li><li>提交后：统一查询“我的报名”，逐场核验结果</li></ul></section></div></div>}
+        {activePage === 'guide' && <div className="guide-grid"><section className="section-block guide-main"><div className="section-heading"><div><h2>首次使用，按这 5 步操作</h2><p>适用于 Lecture800 Windows 桌面端</p></div><CircleHelp /></div><ol className="guide-steps"><li><span>1</span><div><h3>本人登录小程序</h3><p>在 Windows 微信中登录“科大微门户”，进入“研究生学术讲座信息化平台”。软件不索取账号密码。</p></div></li><li><span>2</span><div><h3>授权并验证本机会话</h3><p>仅在明确授权后捕获目标学校域名的登录会话。会话用当前 Windows 用户的 DPAPI 加密保存，界面只显示验证结果，不显示 Token 或 Cookie。</p><p>点击“打开内置配置向导”，等引擎就绪后从应用列表重新进入讲座平台。操作窗口为 10 分钟，通常几秒完成；状态区会显示是否看到目标请求。成功、取消或超时都会清理临时证书，不修改系统代理。</p><button className="button secondary small" onClick={() => setShowSessionSetup(true)}>打开内置配置向导</button></div></li><li><span>3</span><div><h3>确认三项连接验证通过</h3><p>首页和设置页会实际请求学校接口。讲座与“我的”可独立并发读取，无需保持小程序在前台，也不依赖屏幕截图或控件。</p></div></li><li><span>4</span><div><h3>选择地点并开启每日任务</h3><p>在设置页勾选允许自动报名的校区和开课地点，再打开“自动抢课”。开关与地点规则都会立即保存，不需要另建 Windows 定时任务。</p></div></li><li><span>5</span><div><h3>手动、即时或每日自动报名</h3><p>可报名讲座的卡片和详情页提供“手动报名”；首页“立即开始自动抢课”会按当前地点规则立即并发提交全部候选。每天 11:58 预检、12:00 自动任务仍然保留。所有操作逐场以“我的报名”为回执，未核验到不记为成功，也不会自动重发。</p></div></li></ol><div className="setup-notice session-reuse-note"><ShieldCheck size={18} /><div><strong>再次打开 EXE，无需同步打开微信小程序</strong><p>配置成功后，程序会复用本机加密会话直接访问接口。仅在会话失效、换电脑／Windows 用户或连接验证失败时，才需重新打开小程序配置。</p></div></div></section><div className="guide-side"><section className="section-block security-card"><span className="stat-icon green"><ShieldCheck /></span><h2>实现原理与限制</h2><p className="guide-copy">首次从本人已登录流量捕获 Cookie／Token，之后由 Python requests 直接请求学校 H5 接口并保存服务端下发的新会话。12:00 秒级触发并并发提交可缩短耗时，但受学校服务器、名额和网络影响，不能保证全部抢到或长期无人值守。</p></section><section className="section-block security-card"><span className="stat-icon amber"><BookOpenCheck /></span><h2>考勤分类与退课</h2><p className="guide-copy">接口签到字段为 1 时归为“已考勤”；讲座已结束且未记录签到时归为“未完成考勤”，与“待评价／已评价”分开显示。可退课程会显示“退课”，必须二次确认，并重新查询报名记录确认移除后才记为成功。</p></section><section className="section-block security-card"><span className="stat-icon blue"><MonitorCheck /></span><h2>EXE 移植要求</h2><ul><li>单 EXE 可启动不等于免配置抢课，也不保证报名成功</li><li>Windows 10／11，需要 Microsoft Edge WebView2，无需另装 Python 或 Node.js</li><li>复制到可写目录；任务与数据保存在 EXE 旁的 Lecture800-data</li><li>首次配置已内置：在设置页或使用说明中打开配置向导</li><li>新电脑必须重新捕获；如提示权限不足，需手动以管理员身份运行</li><li>DPAPI 会话绑定原电脑和 Windows 用户，复制数据目录不能迁移登录</li><li>每天保持 EXE 运行、电脑不睡眠、网络可用且会话有效</li></ul></section><section className="section-block security-card"><span className="stat-icon amber"><Clock3 /></span><h2>每日时间线</h2><ul><li>11:58：会话、接口与全部候选课程预检</li><li>12:00：重新读取并并发提交全部候选</li><li>提交后：统一查询“我的报名”，逐场核验结果</li></ul></section></div></div>}
       </div>
     </main>
 

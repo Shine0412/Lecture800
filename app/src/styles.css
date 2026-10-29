@@ -255,6 +255,8 @@ svg { flex-shrink: 0; }
 .capture-status strong { font-size: 12px; }
 .capture-status p { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.65; }
 .capture-facts { display: flex; flex-wrap: wrap; gap: 7px 15px; margin: 12px 0; color: var(--muted); font-size: 10px; }
+.capture-receipt { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; padding: 11px 13px; border-radius: 9px; background: #17261d; color: #b5d6a5; font-size: 11px; line-height: 1.7; }
+.capture-receipt svg { flex-shrink: 0; margin-top: 2px; }
 .capture-consent { display: flex; align-items: flex-start; gap: 10px; padding: 12px 0; color: #c0d0c5; font-size: 11px; line-height: 1.7; cursor: pointer; }
 .capture-consent input { width: 17px; height: 17px; margin: 1px 0 0; accent-color: var(--lime); flex-shrink: 0; }
 .setup-help { color: #e0bd89; font-size: 11px; line-height: 1.7; margin: 10px 0 0; }
