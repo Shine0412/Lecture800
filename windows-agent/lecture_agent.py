@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -31,8 +32,12 @@ LOG_FILE = DATA_DIR / "operations.jsonl"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 SESSION_FILE = DATA_DIR / "session.dpapi"
 _settings_lock = threading.Lock()
-_snapshot_lock = threading.Lock()
 _enroll_lock = threading.Lock()
+_log_lock = threading.Lock()
+# /api/mine 的展示级缓存：报名/退课回执仍直接调用 scrape_mine，不受影响。
+_mine_cache = {"payload": None, "expires": 0.0}
+_mine_cache_lock = threading.Lock()
+MINE_CACHE_TTL_SECONDS = 60
 
 
 def now_iso():
@@ -62,7 +67,17 @@ def load_settings():
             "reviewTime": "12:00",
             "writeEnabled": True,
             "scheduler": "embedded",
+            "lastRunKey": stored.get("lastRunKey"),
         }
+
+
+def set_last_run_key(run_key):
+    with _settings_lock:
+        stored = _read_stored_settings()
+        stored["lastRunKey"] = run_key
+        temporary = SETTINGS_FILE.with_suffix(".tmp")
+        temporary.write_text(json.dumps(stored, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(SETTINGS_FILE)
 
 
 def update_settings(auto_enabled=None, location_rules=None):
@@ -106,8 +121,9 @@ def set_location_rules(location_rules):
 
 def append_log(action, result, detail=None):
     record = {"time": now_iso(), "action": action, "result": result, "detail": detail}
-    with LOG_FILE.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    with _log_lock:
+        with LOG_FILE.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def write_json(path, payload):
@@ -116,15 +132,23 @@ def write_json(path, payload):
     temporary.replace(path)
 
 
-def scrape_lectures():
-    lectures = h5_client().lectures()
-    snapshot = {
+def build_lecture_snapshot(lectures):
+    # candidates 由后端按当前地点规则统一计算，前端展示与批量提交共用同一结果。
+    from enrollment_policy import select_candidates
+
+    return {
         "connected": True,
         "source": "https-api",
         "fetchedAt": now_iso(),
         "count": len(lectures),
         "lectures": lectures,
+        "candidates": [item["id"] for item in select_candidates(lectures, load_settings().get("locationRules"))],
     }
+
+
+def scrape_lectures():
+    lectures = h5_client().lectures()
+    snapshot = build_lecture_snapshot(lectures)
     write_json(SNAPSHOT_FILE, snapshot)
     return snapshot
 
@@ -142,9 +166,26 @@ def scrape_mine():
     return payload
 
 
+def cached_mine(force_refresh=False):
+    with _mine_cache_lock:
+        if not force_refresh and _mine_cache["payload"] is not None and time.monotonic() < _mine_cache["expires"]:
+            return _mine_cache["payload"]
+    payload = scrape_mine()
+    with _mine_cache_lock:
+        _mine_cache["payload"] = payload
+        _mine_cache["expires"] = time.monotonic() + MINE_CACHE_TTL_SECONDS
+    return payload
+
+
+def invalidate_mine_cache():
+    with _mine_cache_lock:
+        _mine_cache["payload"] = None
+        _mine_cache["expires"] = 0.0
+
+
 def refresh_all():
     lectures, mine = h5_client().read_all()
-    lecture_snapshot = {"connected": True, "source": "https-api", "fetchedAt": now_iso(), "count": len(lectures), "lectures": lectures}
+    lecture_snapshot = build_lecture_snapshot(lectures)
     mine_snapshot = {"connected": True, "source": "https-api", "page": "mine", "fetchedAt": now_iso(), **mine}
     write_json(SNAPSHOT_FILE, lecture_snapshot)
     write_json(MINE_FILE, mine_snapshot)
@@ -227,6 +268,7 @@ def enroll_lecture(lecture_id, confirm=False):
                 return respond(409, {"ok": False, "verified": False, "error": "NOT_OPEN", "message": "该讲座当前不可报名，未发送报名请求"}, "rejected", lecture)
 
             h5_client().apply(lecture_id)
+            invalidate_mine_cache()
             receipt = scrape_mine()
             enrolled = next((item for item in receipt["applications"] if item["id"] == lecture_id), None)
             if not enrolled:
@@ -269,6 +311,7 @@ def enroll_all_lectures(confirm=False):
             with ThreadPoolExecutor(max_workers=len(candidates), thread_name_prefix="Lecture800NoonApply") as pool:
                 submissions = list(pool.map(submit, candidates))
             submit_elapsed_ms = round((time.perf_counter() - submit_started) * 1000)
+            invalidate_mine_cache()
             receipt = scrape_mine()
             enrolled_ids = {item["id"] for item in receipt["applications"]}
             results = []
@@ -327,6 +370,7 @@ def withdraw_lecture(lecture_id, apply_id, confirm=False):
             if not lecture.get("canWithdraw"):
                 return respond(409, {"ok": False, "verified": False, "error": "WITHDRAW_CLOSED", "message": "该讲座已超出小程序允许的退课时间，未发送退课请求"}, lecture)
             h5_client().withdraw(lecture_id, apply_id)
+            invalidate_mine_cache()
             receipt = scrape_mine()
             if any(item["id"] == lecture_id for item in receipt["applications"]):
                 return respond(502, {"ok": False, "verified": False, "error": "WITHDRAW_RECEIPT_STILL_PRESENT", "message": "退课请求已发送，但该讲座仍在我的报名中，不能记为退课成功"}, lecture)
@@ -386,7 +430,9 @@ def create_app():
     @app.route("/api/mine")
     def mine():
         try:
-            return jsonify(scrape_mine())
+            # 常规轮询走 60 秒缓存；"同步我的信息"与报名动作后的刷新带 refresh=true 旁路。
+            force = request.args.get("refresh") == "true"
+            return jsonify(cached_mine(force))
         except Exception as error:
             return jsonify({"connected": False, "page": "unavailable", "message": str(error)}), 503
 

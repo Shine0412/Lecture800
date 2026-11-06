@@ -70,7 +70,7 @@ try {
     },
     items: [], rawItems: [],
   })
-  await page.route('**/api/mine', (route) => route.fulfill({ json: minePayload() }))
+  await page.route('**/api/mine*', (route) => route.fulfill({ json: minePayload() }))
   await page.route('**/api/withdraw', async (route) => {
     withdrawCalls.push(route.request().postDataJSON())
     if (failNextWithdraw) {

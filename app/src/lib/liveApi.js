@@ -52,6 +52,8 @@ export async function fetchLiveLectures({ refresh = false, signal } = {}) {
   return {
     connected: true,
     fetchedAt: payload.fetchedAt,
+    // 后端按当前地点规则计算的候选 ID 顺序；旧版后端不返回该字段时为 null，前端回退本地计算。
+    candidateIds: Array.isArray(payload.candidates) ? payload.candidates.map(String) : null,
     lectures: Array.isArray(payload.lectures) ? payload.lectures.map(normalizeLecture) : [],
   }
 }
@@ -95,8 +97,8 @@ export async function cancelCapture() {
   return payload
 }
 
-export async function fetchMine({ signal } = {}) {
-  const response = await fetch('/api/mine', { cache: 'no-store', signal })
+export async function fetchMine({ signal, refresh = false } = {}) {
+  const response = await fetch(refresh ? '/api/mine?refresh=true' : '/api/mine', { cache: 'no-store', signal })
   const payload = await response.json().catch(() => null)
   if (!response.ok || !payload?.connected || payload.page !== 'mine') {
     throw new Error(payload?.message || '个人信息接口请求失败，请检查登录会话')

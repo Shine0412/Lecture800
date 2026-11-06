@@ -146,18 +146,21 @@ export default function App() {
   const [autoError, setAutoError] = useState('')
   const [autoReceipt, setAutoReceipt] = useState(null)
   const [showSessionSetup, setShowSessionSetup] = useState(false)
+  const [candidateIds, setCandidateIds] = useState(null)
   const nextPrecheck = getNextRun('11:58')
   const dataInFlight = useRef(false)
   const mineInFlight = useRef(false)
   const verificationRef = useRef(null)
+  const activePageRef = useRef(activePage)
+  activePageRef.current = activePage
   const showToast = useCallback((message, tone = 'success') => setToast({ message, tone }), [])
 
-  const loadMine = useCallback(async (notify = false) => {
+  const loadMine = useCallback(async (notify = false, forceRefresh = false) => {
     if (mineInFlight.current) return null
     mineInFlight.current = true
     setMineLoading(true)
     try {
-      const result = await fetchMine()
+      const result = await fetchMine({ refresh: forceRefresh })
       setMine(result)
       setMineError('')
       if (notify) showToast(`已读取个人资料、四项统计和 ${result.applications?.length ?? 0} 条报名记录。`)
@@ -182,6 +185,7 @@ export default function App() {
         shouldVerify ? fetchVerification() : Promise.resolve(null), fetchSettings(),
       ])
       setLectures(snapshot.lectures)
+      setCandidateIds(snapshot.candidateIds ?? null)
       setLogs(operationLogs.map(logView))
       if (checks) {
         verificationRef.current = checks
@@ -191,7 +195,6 @@ export default function App() {
       setConnected(Boolean(snapshot.connected && (!checks || checks.connected)))
       setLastSync(snapshot.fetchedAt)
       setError('')
-      loadMine(false)
       if (manual) showToast(`已通过接口同步 ${snapshot.lectures.length} 场 800 级讲座。`)
     } catch (reason) {
       setConnected(false)
@@ -212,12 +215,20 @@ export default function App() {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [loadMine, showToast])
+  }, [showToast])
 
   const handleCaptureVerified = useCallback(async () => {
     await loadData(false)
     showToast('本机会话配置完成，讲座与我的信息已通过 HTTPS 接口验证。')
   }, [loadData, showToast])
+
+  // 我的信息只在“我的信息”页轮询（15 秒），其他页面不再触发分页接口请求。
+  useEffect(() => {
+    if (activePage !== 'mine') return
+    loadMine(false)
+    const timer = window.setInterval(() => loadMine(false), 15000)
+    return () => window.clearInterval(timer)
+  }, [activePage, loadMine])
 
   const confirmEnroll = useCallback(async () => {
     if (!enrollTarget || enrolling || autoRunning) return
@@ -227,6 +238,7 @@ export default function App() {
       const result = await enrollLecture(enrollTarget.id)
       setEnrollTarget(null)
       await loadData(false)
+      loadMine(false, true)
       showToast(result.message || '报名成功，已在我的报名中核验到该讲座。')
     } catch (reason) {
       setEnrollError(reason.message || '报名未完成，请先查询我的报名')
@@ -244,12 +256,14 @@ export default function App() {
       setAutoReceipt(result)
       setShowAutoConfirm(false)
       await loadData(false)
+      loadMine(false, true)
       showToast(result.message || `即时抢课完成，核验到 ${result.verifiedCount ?? 0} 场。`, result.verified ? 'success' : 'warning')
     } catch (reason) {
       if (reason.result) {
         setAutoReceipt(reason.result)
         setShowAutoConfirm(false)
         await loadData(false)
+        loadMine(false, true)
         showToast(reason.message || '部分课程未通过回执核验，请查看结果明细。', 'warning')
       } else {
         setAutoError(reason.message || '即时抢课未能完成')
@@ -267,6 +281,7 @@ export default function App() {
       await withdrawLecture({ lectureId: withdrawTarget.id, applyId: withdrawTarget.applyId })
       setWithdrawTarget(null)
       await loadData(false)
+      loadMine(false, true)
       showToast('退课成功，已确认该讲座从我的报名中移除。')
     } catch (reason) {
       setWithdrawError(reason.message || '退课失败，请稍后查询我的报名')
@@ -297,12 +312,13 @@ export default function App() {
       const result = await setLocationRules(nextRules)
       setSettings(result)
       showToast(`已保存地点选择：${LOCATION_OPTIONS.filter((item) => result.locationRules[item.key]).map((item) => item.label).join('、') || '未选择任何地点'}。`)
+      await loadData(false)
     } catch (reason) {
       showToast(reason.message || '地点规则保存失败', 'warning')
     } finally {
       setSettingsSaving(false)
     }
-  }, [settings, settingsSaving, showToast])
+  }, [settings, settingsSaving, showToast, loadData])
 
   useEffect(() => {
     loadData()
@@ -320,7 +336,14 @@ export default function App() {
   const visibleMineLectures = mineTab === 'all' ? myLectures : (mine?.groups?.[mineTab] ?? [])
   const locationRules = normalizeLocationRules(settings?.locationRules ?? DEFAULT_LOCATION_RULES)
   const selectedLocations = LOCATION_OPTIONS.filter((item) => locationRules[item.key]).map((item) => item.label)
-  const openTarget = selectOpenCandidates(lectures, locationRules)
+  // 候选以服务端计算为准（与批量提交完全一致）；旧版后端无 candidates 字段时回退本地计算。
+  const openTarget = useMemo(() => {
+    if (candidateIds) {
+      const byId = new Map(lectures.map((item) => [item.id, item]))
+      return candidateIds.map((id) => byId.get(id)).filter(Boolean)
+    }
+    return selectOpenCandidates(lectures, locationRules)
+  }, [lectures, candidateIds, locationRules])
   const fullCount = lectures.filter((lecture) => lecture.status === 'full').length
   const upcomingCount = lectures.filter((lecture) => lecture.status === 'upcoming').length
   const filteredLectures = useMemo(() => lectures.filter((lecture) => {
@@ -359,7 +382,7 @@ export default function App() {
         {activePage === 'lectures' && <section className="section-block catalog-section"><div className="catalog-tools"><div className="search-box"><Search size={18} /><input aria-label="搜索讲座" placeholder="搜索讲座、主讲人或地点" value={search} onChange={(e) => setSearch(e.target.value)} />{search && <button onClick={() => setSearch('')} aria-label="清空搜索"><X size={16} /></button>}</div><span className="result-count">{filteredLectures.length} 场讲座</span></div><div className="filter-row"><ListFilter size={17} />{[['all', '全部'], ['800', '800 级'], ['open', '可报名'], ['upcoming', '未开放'], ['mine', '我的'], ['full', '已满员']].map(([id, label]) => <button key={id} className={filter === id ? 'active' : ''} onClick={() => setFilter(id)}>{label}</button>)}</div><div className="lecture-grid">{filteredLectures.map((lecture) => <LectureCard key={lecture.id} lecture={lecture} onSelect={setSelected} onEnroll={(target) => { setEnrollError(''); setEnrollTarget(target) }} enrolling={enrolling && enrollTarget?.id === lecture.id} enrollDisabled={autoRunning} />)}{!filteredLectures.length && <EmptyState title="没有匹配的讲座" copy="试试更换搜索关键词或状态筛选。" />}</div></section>}
 
         {activePage === 'mine' && <>
-          <section className="section-block mine-panel"><div className="section-heading"><div><h2>我的接口数据</h2><p>个人资料、统计与报名独立请求，无需切换小程序页面</p></div><button className="button secondary small" disabled={mineLoading} onClick={() => loadMine(true)}><RefreshCw size={15} className={mineLoading ? 'spinning' : ''} />{mineLoading ? '正在读取…' : '同步我的信息'}</button></div>
+          <section className="section-block mine-panel"><div className="section-heading"><div><h2>我的接口数据</h2><p>个人资料、统计与报名独立请求，无需切换小程序页面</p></div><button className="button secondary small" disabled={mineLoading} onClick={() => loadMine(true, true)}><RefreshCw size={15} className={mineLoading ? 'spinning' : ''} />{mineLoading ? '正在读取…' : '同步我的信息'}</button></div>
             {mineError && <div className="inline-notice warning"><AlertCircle size={17} /><span>{mineError}</span></div>}
             {mine && <><div className="verified-line"><CheckCircle2 size={17} />接口验证通过 · {formatSyncTime(mine.fetchedAt)}</div>
               <div className="mine-profile"><span className="avatar"><UserRound size={20} /></span><div><small>账号／学号</small><strong>{mine.profile?.account || '接口未返回'}</strong></div>{mine.profile?.role && <span className="category-tag">{mine.profile.role}</span>}</div>
